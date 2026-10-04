@@ -42,6 +42,7 @@
 #include "shapes/jolt_box_shape_3d.h"
 #include "shapes/jolt_capsule_shape_3d.h"
 #include "shapes/jolt_concave_polygon_shape_3d.h"
+#include "shapes/jolt_voxel_grid_shape_3d.h"
 #include "shapes/jolt_convex_polygon_shape_3d.h"
 #include "shapes/jolt_cylinder_shape_3d.h"
 #include "shapes/jolt_height_map_shape_3d.h"
@@ -128,7 +129,11 @@ RID JoltPhysicsServer3D::heightmap_shape_create() {
 }
 
 RID JoltPhysicsServer3D::custom_shape_create() {
-	ERR_FAIL_V_MSG(RID(), "Custom shapes are not supported.");
+	// Terra Prime (M19.9.8, D221): the custom shape is a voxel box-grid shape.
+	JoltShape3D *shape = memnew(JoltVoxelGridShape3D);
+	RID rid = shape_owner.make_rid(shape);
+	shape->set_rid(rid);
+	return rid;
 }
 
 void JoltPhysicsServer3D::shape_set_data(RID p_shape, const Variant &p_data) {
