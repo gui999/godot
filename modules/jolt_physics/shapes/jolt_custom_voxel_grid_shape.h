@@ -36,7 +36,13 @@
 // solid voxels cover whole (in its own cell, or in a neighbour cell, the grid's one-cell ring included)
 // cannot be touched from outside, so a contact that would push through it is answered on the box's
 // exposed faces instead (the least penetrated one, by the separating-axis test), never dropped while
-// the shapes overlap: the voxel counterpart of a mesh's active edges. The shape is immutable once built.
+// the shapes overlap: the voxel counterpart of a mesh's active edges.
+//
+// Terra Prime (M19.13, D340): cells change in place (set_cell, add_module), so an edited row keeps its
+// shape and its body stays in the space. Its bounds are the whole grid's and its sub-shape ID bits are
+// fixed by the grid's size and the most boxes a cell can hold, so an update changes neither: owners'
+// compounds and contacts in flight stay valid. An update must run between physics steps on the thread
+// that steps (Godot's main thread when physics does not run on its own thread); nothing here locks.
 
 #include "jolt_custom_shape_type.h"
 
@@ -90,6 +96,13 @@ public:
 	static void register_type();
 
 	explicit JoltCustomVoxelGridShape(Data &&p_data);
+
+	// In-place updates (between physics steps only). A padded cell's module (or -1); a module appended
+	// to the table, returning its index; false when the module has more boxes than a cell can hold.
+	void set_cell(int p_padded_cell, int p_module);
+	int module_count() const { return int(data.modules.size()); }
+	bool add_module(const JPH::RefConst<Module> &p_module);
+	int padded_cell_count() const { return int(data.padded_modules.size()); }
 
 	bool MustBeStatic() const override { return true; }
 	JPH::AABox GetLocalBounds() const override { return bounds; }
