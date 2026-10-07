@@ -341,24 +341,27 @@ JoltCustomVoxelGridShape::JoltCustomVoxelGridShape(Data &&p_data) :
 		JPH::Shape(JPH::EShapeType::User3, JoltCustomShapeSubType::VOXEL_GRID), data(std::move(p_data)) {
 	const int cells = data.size[0] * data.size[1] * data.size[2];
 	cell_bits = bits_for(std::max(cells, 1));
-	// The most boxes a cell can hold (one a voxel), so a module added later fits the same IDs.
-	box_bits = bits_for(data.cell_voxels * data.cell_voxels * data.cell_voxels);
-	// The whole grid, occupied or not, so a cell update never moves the bounds.
-	bounds = JPH::AABox(data.origin, data.origin + JPH::Vec3(float(data.size[0]), float(data.size[1]), float(data.size[2])) * data.cell_meters);
-}
-
-void JoltCustomVoxelGridShape::set_cell(int p_padded_cell, int p_module) {
-	JPH_ASSERT(p_padded_cell >= 0 && p_padded_cell < int(data.padded_modules.size()));
-	JPH_ASSERT(p_module >= -1 && p_module < int(data.modules.size()));
-	data.padded_modules[size_t(p_padded_cell)] = p_module;
-}
-
-bool JoltCustomVoxelGridShape::add_module(const JPH::RefConst<Module> &p_module) {
-	if (p_module->box_count > (1 << box_bits)) {
-		return false;
+	int most_boxes = 1;
+	for (const JPH::RefConst<Module> &module : data.modules) {
+		most_boxes = std::max(most_boxes, module->box_count);
 	}
-	data.modules.push_back(p_module);
-	return true;
+	box_bits = bits_for(most_boxes);
+	bounds = JPH::AABox();
+	for (int j = 0; j < data.size[1]; j++) {
+		for (int k = 0; k < data.size[2]; k++) {
+			for (int i = 0; i < data.size[0]; i++) {
+				const int module = data.padded_modules[padded_index(i, j, k)];
+				if (module < 0 || data.modules[module]->box_count == 0) {
+					continue;
+				}
+				const JPH::Vec3 low = data.origin + JPH::Vec3(float(i), float(j), float(k)) * data.cell_meters;
+				bounds.Encapsulate(JPH::AABox(low, low + JPH::Vec3::sReplicate(data.cell_meters)));
+			}
+		}
+	}
+	if (!bounds.IsValid()) {
+		bounds = JPH::AABox(data.origin, data.origin);
+	}
 }
 
 const JPH::PhysicsMaterial *JoltCustomVoxelGridShape::GetMaterial(const JPH::SubShapeID &p_sub_shape_id) const {

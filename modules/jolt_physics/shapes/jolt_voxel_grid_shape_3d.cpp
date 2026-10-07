@@ -32,9 +32,6 @@
 
 #include "jolt_custom_voxel_grid_shape.h"
 
-#include "../objects/jolt_shaped_object_3d.h"
-#include "../spaces/jolt_space_3d.h"
-
 JPH::ShapeRefC JoltVoxelGridShape3D::_build() const {
 	if (data.is_empty()) {
 		return nullptr;
@@ -62,83 +59,9 @@ JPH::ShapeRefC JoltVoxelGridShape3D::_build() const {
 	return new JoltCustomVoxelGridShape(std::move(grid));
 }
 
-void JoltVoxelGridShape3D::_update(const Dictionary &p_update) {
-	ERR_FAIL_COND_MSG(data.is_empty(), "A voxel grid shape's cells can only be updated once it has a grid.");
-	ERR_FAIL_COND(p_update["update"].get_type() != Variant::PACKED_INT32_ARRAY);
-	ERR_FAIL_COND(p_update.get("box_offsets", Variant()).get_type() != Variant::PACKED_INT32_ARRAY);
-	ERR_FAIL_COND(p_update.get("boxes", Variant()).get_type() != Variant::PACKED_FLOAT32_ARRAY);
-	const PackedInt32Array pairs = p_update["update"];
-	const PackedInt32Array added_offsets = p_update["box_offsets"];
-	const PackedFloat32Array added_boxes = p_update["boxes"];
-	PackedInt32Array cells = data["cells"];
-	PackedInt32Array box_offsets = data["box_offsets"];
-	PackedFloat32Array boxes = data["boxes"];
-	const int cell_voxels = data["cell_voxels"];
-	const float cell_size = data["cell_size"];
-	const int had = box_offsets.size() - 1;
-	ERR_FAIL_COND_MSG(pairs.size() % 2 != 0, "A voxel grid shape's update pairs a cell with a module.");
-	ERR_FAIL_COND_MSG(added_offsets.is_empty() || added_offsets[0] != 0 || added_offsets[added_offsets.size() - 1] * 6 != added_boxes.size(), "A voxel grid shape update's box offsets must start at 0 and end at the box count.");
-	const int added = added_offsets.size() - 1;
-	for (int m = 0; m < added; m++) {
-		ERR_FAIL_COND_MSG(added_offsets[m + 1] < added_offsets[m], "A voxel grid shape update's box offsets must not decrease.");
-		ERR_FAIL_COND_MSG(added_offsets[m + 1] - added_offsets[m] > cell_voxels * cell_voxels * cell_voxels, "A voxel grid shape's module has more boxes than a cell has voxels.");
-	}
-	for (int p = 0; p < pairs.size(); p += 2) {
-		ERR_FAIL_COND_MSG(pairs[p] < 0 || pairs[p] >= cells.size(), "A voxel grid shape update names a cell outside the grid.");
-		ERR_FAIL_COND_MSG(pairs[p + 1] < -1 || pairs[p + 1] >= had + added, "A voxel grid shape update names a module the shape does not have.");
-	}
-
-	// The stored data first, so get_data and a later build reproduce the live grid.
-	const int base = box_offsets[had];
-	for (int m = 1; m <= added; m++) {
-		box_offsets.push_back(base + added_offsets[m]);
-	}
-	boxes.append_array(added_boxes);
-	for (int p = 0; p < pairs.size(); p += 2) {
-		cells.set(pairs[p], pairs[p + 1]);
-	}
-	data["cells"] = cells;
-	data["box_offsets"] = box_offsets;
-	data["boxes"] = boxes;
-
-	jolt_ref_mutex.lock();
-	// Built shapes are shared as const references; this one is changed in place by design (between steps).
-	JoltCustomVoxelGridShape *grid = const_cast<JoltCustomVoxelGridShape *>(static_cast<const JoltCustomVoxelGridShape *>(jolt_ref.GetPtr()));
-	if (grid != nullptr) {
-		for (int m = 0; m < added; m++) {
-			const int first = added_offsets[m], last = added_offsets[m + 1];
-			const bool fits = grid->add_module(JoltCustomVoxelGridShape::get_module(added_boxes.ptr() + (size_t)first * 6, last - first, cell_size, cell_voxels));
-			CRASH_COND(!fits); // checked above against the same cap
-		}
-		for (int p = 0; p < pairs.size(); p += 2) {
-			grid->set_cell(pairs[p], pairs[p + 1]);
-		}
-	}
-	jolt_ref_mutex.unlock();
-	if (grid == nullptr) {
-		return;
-	}
-
-	// The bodies keep their shape and bounds: what they touched is recomputed, and what slept on a
-	// cell that went falls.
-	for (const KeyValue<JoltShapedObject3D *, int> &E : ref_counts_by_owner) {
-		JoltShapedObject3D *owner = E.key;
-		if (!owner->in_space()) {
-			continue;
-		}
-		JPH::BodyInterface &bodies = owner->get_space()->get_body_iface();
-		bodies.InvalidateContactCache(owner->get_jolt_id());
-		bodies.ActivateBodiesInAABox(owner->get_jolt_body()->GetWorldSpaceBounds(), {}, {});
-	}
-}
-
 void JoltVoxelGridShape3D::set_data(const Variant &p_data) {
 	ERR_FAIL_COND_MSG(p_data.get_type() != Variant::DICTIONARY, "A voxel grid shape takes a Dictionary.");
 	const Dictionary new_data = p_data;
-	if (new_data.has("update")) {
-		_update(new_data);
-		return;
-	}
 	ERR_FAIL_COND(new_data.get("cell_size", Variant()).get_type() != Variant::FLOAT);
 	ERR_FAIL_COND(new_data.get("cell_voxels", Variant()).get_type() != Variant::INT);
 	ERR_FAIL_COND(new_data.get("size", Variant()).get_type() != Variant::VECTOR3I);

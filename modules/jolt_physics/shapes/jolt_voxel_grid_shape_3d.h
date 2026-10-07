@@ -37,12 +37,6 @@
 // one-cell ring, x fastest, then z, then y), "box_offsets" (PackedInt32Array, each module's first box
 // and one past the last) and "boxes" (PackedFloat32Array, per box min xyz and max xyz in metres in the
 // cell's frame). Ring cells are read only for face cover.
-//
-// Terra Prime (M19.13, D340): set_data with "update" (PackedInt32Array, pairs of a padded cell index and
-// a module index or -1) changes those cells in place; "box_offsets" and "boxes" there hold only the
-// modules appended to the table (indices following the existing ones). The built Jolt shape is changed
-// in place, its owners' bodies stay in their spaces, their contact caches are invalidated and bodies
-// sleeping in their bounds are woken. Call it between physics steps only.
 
 #include "jolt_shape_3d.h"
 
@@ -51,8 +45,6 @@ class JoltVoxelGridShape3D final : public JoltShape3D {
 	Dictionary data;
 
 	virtual JPH::ShapeRefC _build() const override;
-
-	void _update(const Dictionary &p_update);
 
 public:
 	virtual ShapeType get_type() const override { return ShapeType::SHAPE_CUSTOM; }
