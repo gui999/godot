@@ -182,8 +182,7 @@ void JoltCustomRayShape::register_type() {
 		JPH::EShapeSubType::Mesh,
 		JPH::EShapeSubType::HeightField,
 		JPH::EShapeSubType::Plane,
-		JPH::EShapeSubType::TaperedCylinder,
-		JoltCustomShapeSubType::VOXEL_GRID
+		JPH::EShapeSubType::TaperedCylinder
 	};
 
 	for (const JPH::EShapeSubType concrete_sub_type : concrete_sub_types) {

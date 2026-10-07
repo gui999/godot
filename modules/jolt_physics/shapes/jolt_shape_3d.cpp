@@ -33,7 +33,6 @@
 #include "../misc/jolt_type_conversions.h"
 #include "../objects/jolt_shaped_object_3d.h"
 #include "jolt_custom_double_sided_shape.h"
-#include "jolt_custom_voxel_grid_shape.h"
 #include "jolt_custom_user_data_shape.h"
 
 #include <Jolt/Physics/Collision/Shape/MutableCompoundShape.h>
@@ -185,11 +184,6 @@ JPH::ShapeRefC JoltShape3D::without_custom_shapes(const JPH::Shape *p_shape) {
 		case JoltCustomShapeSubType::MOTION: {
 			// Replace unsupported shapes with a small sphere.
 			return new JPH::SphereShape(0.1f);
-		}
-
-		case JoltCustomShapeSubType::VOXEL_GRID: {
-			// Replace the voxel grid with its boxes.
-			return static_cast<const JoltCustomVoxelGridShape *>(p_shape)->make_box_compound();
 		}
 
 		case JoltCustomShapeSubType::OVERRIDE_USER_DATA:

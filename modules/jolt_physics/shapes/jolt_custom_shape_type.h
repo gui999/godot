@@ -40,7 +40,5 @@ constexpr JPH::EShapeSubType OVERRIDE_USER_DATA = JPH::EShapeSubType::User1;
 constexpr JPH::EShapeSubType DOUBLE_SIDED = JPH::EShapeSubType::User2;
 constexpr JPH::EShapeSubType RAY = JPH::EShapeSubType::UserConvex1;
 constexpr JPH::EShapeSubType MOTION = JPH::EShapeSubType::UserConvex2;
-// Terra Prime (M19.9.8): the voxel box-grid shape.
-constexpr JPH::EShapeSubType VOXEL_GRID = JPH::EShapeSubType::User3;
 
 } // namespace JoltCustomShapeSubType
