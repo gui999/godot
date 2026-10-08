@@ -35,6 +35,7 @@
 #include "nav_region_iteration_3d.h"
 
 #include "core/config/project_settings.h"
+#include "core/templates/pair.h"
 
 using namespace Nav3D;
 
@@ -187,6 +188,78 @@ void NavMapBuilder3D::_build_step_merge_edge_connection_pairs(NavMapIterationBui
 	}
 }
 
+// Terra Prime: the per-pair test of the edge connection margin step, unchanged from upstream's
+// loop body. It connects `p_other_edge` to `p_free_edge` when the two lie within the margin.
+static bool _edge_margin_connection(const Connection &p_free_edge, const Connection &p_other_edge, real_t p_edge_connection_margin_squared, Connection &r_connection) {
+	const Vector3 &edge_p1 = p_free_edge.pathway_start;
+	const Vector3 &edge_p2 = p_free_edge.pathway_end;
+	const Vector3 &other_edge_p1 = p_other_edge.pathway_start;
+	const Vector3 &other_edge_p2 = p_other_edge.pathway_end;
+
+	// Compute the projection of the opposite edge on the current one
+	Vector3 edge_vector = edge_p2 - edge_p1;
+	real_t projected_p1_ratio = edge_vector.dot(other_edge_p1 - edge_p1) / (edge_vector.length_squared());
+	real_t projected_p2_ratio = edge_vector.dot(other_edge_p2 - edge_p1) / (edge_vector.length_squared());
+	if ((projected_p1_ratio < 0.0 && projected_p2_ratio < 0.0) || (projected_p1_ratio > 1.0 && projected_p2_ratio > 1.0)) {
+		return false;
+	}
+
+	// Check if the two edges are close to each other enough and compute a pathway between the two regions.
+	Vector3 self1 = edge_vector * CLAMP(projected_p1_ratio, 0.0, 1.0) + edge_p1;
+	Vector3 other1;
+	if (projected_p1_ratio >= 0.0 && projected_p1_ratio <= 1.0) {
+		other1 = other_edge_p1;
+	} else {
+		other1 = other_edge_p1.lerp(other_edge_p2, (1.0 - projected_p1_ratio) / (projected_p2_ratio - projected_p1_ratio));
+	}
+	if (other1.distance_squared_to(self1) > p_edge_connection_margin_squared) {
+		return false;
+	}
+
+	Vector3 self2 = edge_vector * CLAMP(projected_p2_ratio, 0.0, 1.0) + edge_p1;
+	Vector3 other2;
+	if (projected_p2_ratio >= 0.0 && projected_p2_ratio <= 1.0) {
+		other2 = other_edge_p2;
+	} else {
+		other2 = other_edge_p1.lerp(other_edge_p2, (0.0 - projected_p1_ratio) / (projected_p2_ratio - projected_p1_ratio));
+	}
+	if (other2.distance_squared_to(self2) > p_edge_connection_margin_squared) {
+		return false;
+	}
+
+	// The edges can now be connected.
+	r_connection = p_other_edge;
+	r_connection.pathway_start = (self1 + other1) / 2.0;
+	r_connection.pathway_end = (self2 + other2) / 2.0;
+	return true;
+}
+
+// Terra Prime: the grid cells that the bounds of the segment `p_a`-`p_b`, grown by `p_grow`, overlap.
+// Returns false when the bounds are not finite, lie too far out for integer cell coordinates, or cover
+// more than `p_max_cells` cells; the caller then treats the edge as near every other edge.
+static bool _edge_margin_cell_range(const Vector3 &p_a, const Vector3 &p_b, double p_grow, double p_cell_size, int64_t p_max_cells, Vector3i &r_from, Vector3i &r_to) {
+	if (!p_a.is_finite() || !p_b.is_finite()) {
+		return false;
+	}
+	const double cell_limit = 1 << 29;
+	int64_t cell_count = 1;
+	for (int axis = 0; axis < 3; axis++) {
+		const double low = Math::floor((MIN((double)p_a[axis], (double)p_b[axis]) - p_grow) / p_cell_size);
+		const double high = Math::floor((MAX((double)p_a[axis], (double)p_b[axis]) + p_grow) / p_cell_size);
+		// Written so that NaN (from an infinite span) fails the test.
+		if (!(low >= -cell_limit && high <= cell_limit)) {
+			return false;
+		}
+		r_from[axis] = (int32_t)low;
+		r_to[axis] = (int32_t)high;
+		cell_count *= (int64_t)(r_to[axis] - r_from[axis] + 1);
+		if (cell_count > p_max_cells) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void NavMapBuilder3D::_build_step_edge_connection_margin_connections(NavMapIterationBuild3D &r_build) {
 	PerformanceData &performance_data = r_build.performance_data;
 	NavMapIteration3D *map_iteration = r_build.map_iteration;
@@ -209,63 +282,170 @@ void NavMapBuilder3D::_build_step_edge_connection_margin_connections(NavMapItera
 
 	const real_t edge_connection_margin_squared = edge_connection_margin * edge_connection_margin;
 
-	for (uint32_t i = 0; i < free_edges.size(); i++) {
-		const Connection &free_edge = free_edges[i];
-		const Vector3 &edge_p1 = free_edge.pathway_start;
-		const Vector3 &edge_p2 = free_edge.pathway_end;
+	// Terra Prime: upstream compares every free edge with every other one, which takes about a second
+	// per map iteration at 20k free edges. The edges are bucketed in a uniform grid instead, and each one
+	// is tested only against the edges in the grid cells near it, which makes exactly the connections the
+	// full comparison makes, in the same order:
+	// - Every pair the test accepts has a point of the other edge within the margin of a point of this
+	//   edge: at least one of the two tested points of the other edge lies on it (an endpoint whose
+	//   projected ratio lies in [0, 1], or a lerp whose parameter then lies in [0, 1]), and both tested
+	//   points of this edge lie on it. Their bounds therefore lie within the margin of each other, so
+	//   an edge inserted into every cell its bounds overlap is found by querying the cells that this
+	//   edge's bounds, grown by the margin plus a rounding slack, overlap.
+	// - An edge whose direction has no usable length (ratios of 0/0 accept every pair) or whose bounds
+	//   are not finite or span too many cells is tested against every edge, and is a candidate of every
+	//   query, as before.
+	// - Each query's candidates are sorted, so the connections are appended in the upstream order
+	//   (free edge ascending, then other edge ascending), which keeps path searches deterministic.
+	const uint32_t free_edge_count = free_edges.size();
+	if (free_edge_count < 2) {
+		return;
+	}
 
-		for (uint32_t j = 0; j < free_edges.size(); j++) {
+	LocalVector<uint8_t> edge_tests_all;
+	edge_tests_all.resize(free_edge_count);
+	double max_coordinate = 0.0;
+	double extent_sum = 0.0;
+	uint32_t finite_edge_count = 0;
+	for (uint32_t i = 0; i < free_edge_count; i++) {
+		const Vector3 &edge_p1 = free_edges[i].pathway_start;
+		const Vector3 &edge_p2 = free_edges[i].pathway_end;
+		const bool finite = edge_p1.is_finite() && edge_p2.is_finite();
+		const real_t length_squared = (edge_p2 - edge_p1).length_squared();
+		edge_tests_all[i] = (!finite || !(length_squared >= (real_t)1e-20)) ? 1 : 0;
+		if (finite) {
+			const Vector3 extent = (edge_p2 - edge_p1).abs();
+			extent_sum += MAX(extent.x, MAX(extent.y, extent.z));
+			const Vector3 far_corner = edge_p1.abs().max(edge_p2.abs());
+			max_coordinate = MAX(max_coordinate, (double)MAX(far_corner.x, MAX(far_corner.y, far_corner.z)));
+			finite_edge_count++;
+		}
+	}
+
+	// The slack covers rounding in the test's projected points; it only widens the query.
+	const double query_grow = MAX((double)edge_connection_margin, 0.0) * 1.001 + max_coordinate * 1e-5 + 1e-6;
+	double cell_size = MAX(query_grow, finite_edge_count > 0 ? extent_sum / finite_edge_count : 0.0);
+	if (!(cell_size > 0.0) || !Math::is_finite(cell_size)) {
+		cell_size = 1.0;
+	}
+	const int64_t max_insert_cells = 256;
+	const int64_t max_query_cells = 4096;
+
+	HashMap<Vector3i, LocalVector<uint32_t>> grid;
+	LocalVector<uint32_t> near_every_edge;
+	for (uint32_t j = 0; j < free_edge_count; j++) {
+		Vector3i from;
+		Vector3i to;
+		if (!_edge_margin_cell_range(free_edges[j].pathway_start, free_edges[j].pathway_end, 0.0, cell_size, max_insert_cells, from, to)) {
+			near_every_edge.push_back(j);
+			continue;
+		}
+		for (int32_t x = from.x; x <= to.x; x++) {
+			for (int32_t y = from.y; y <= to.y; y++) {
+				for (int32_t z = from.z; z <= to.z; z++) {
+					grid[Vector3i(x, y, z)].push_back(j);
+				}
+			}
+		}
+	}
+
+#ifdef DEBUG_ENABLED
+	// Terra Prime: on small maps, debug builds check the grid against the full comparison.
+	const bool check_against_all_pairs = free_edge_count <= 512;
+	LocalVector<Pair<uint32_t, uint32_t>> grid_pairs;
+#endif
+
+	LocalVector<uint32_t> last_query;
+	last_query.resize(free_edge_count);
+	for (uint32_t j = 0; j < free_edge_count; j++) {
+		last_query[j] = UINT32_MAX;
+	}
+	LocalVector<uint32_t> candidates;
+
+	for (uint32_t i = 0; i < free_edge_count; i++) {
+		const Connection &free_edge = free_edges[i];
+
+		candidates.clear();
+		Vector3i from;
+		Vector3i to;
+		if (edge_tests_all[i] || !_edge_margin_cell_range(free_edge.pathway_start, free_edge.pathway_end, query_grow, cell_size, max_query_cells, from, to)) {
+			for (uint32_t j = 0; j < free_edge_count; j++) {
+				candidates.push_back(j);
+			}
+		} else {
+			for (int32_t x = from.x; x <= to.x; x++) {
+				for (int32_t y = from.y; y <= to.y; y++) {
+					for (int32_t z = from.z; z <= to.z; z++) {
+						const LocalVector<uint32_t> *cell = grid.getptr(Vector3i(x, y, z));
+						if (cell == nullptr) {
+							continue;
+						}
+						for (const uint32_t j : *cell) {
+							if (last_query[j] != i) {
+								last_query[j] = i;
+								candidates.push_back(j);
+							}
+						}
+					}
+				}
+			}
+			for (const uint32_t j : near_every_edge) {
+				if (last_query[j] != i) {
+					last_query[j] = i;
+					candidates.push_back(j);
+				}
+			}
+			candidates.sort();
+		}
+
+		for (const uint32_t j : candidates) {
 			const Connection &other_edge = free_edges[j];
 			if (i == j || free_edge.polygon->owner == other_edge.polygon->owner) {
 				continue;
 			}
 
-			const Vector3 &other_edge_p1 = other_edge.pathway_start;
-			const Vector3 &other_edge_p2 = other_edge.pathway_end;
-
-			// Compute the projection of the opposite edge on the current one
-			Vector3 edge_vector = edge_p2 - edge_p1;
-			real_t projected_p1_ratio = edge_vector.dot(other_edge_p1 - edge_p1) / (edge_vector.length_squared());
-			real_t projected_p2_ratio = edge_vector.dot(other_edge_p2 - edge_p1) / (edge_vector.length_squared());
-			if ((projected_p1_ratio < 0.0 && projected_p2_ratio < 0.0) || (projected_p1_ratio > 1.0 && projected_p2_ratio > 1.0)) {
+			Connection new_connection;
+			if (!_edge_margin_connection(free_edge, other_edge, edge_connection_margin_squared, new_connection)) {
 				continue;
 			}
-
-			// Check if the two edges are close to each other enough and compute a pathway between the two regions.
-			Vector3 self1 = edge_vector * CLAMP(projected_p1_ratio, 0.0, 1.0) + edge_p1;
-			Vector3 other1;
-			if (projected_p1_ratio >= 0.0 && projected_p1_ratio <= 1.0) {
-				other1 = other_edge_p1;
-			} else {
-				other1 = other_edge_p1.lerp(other_edge_p2, (1.0 - projected_p1_ratio) / (projected_p2_ratio - projected_p1_ratio));
-			}
-			if (other1.distance_squared_to(self1) > edge_connection_margin_squared) {
-				continue;
-			}
-
-			Vector3 self2 = edge_vector * CLAMP(projected_p2_ratio, 0.0, 1.0) + edge_p1;
-			Vector3 other2;
-			if (projected_p2_ratio >= 0.0 && projected_p2_ratio <= 1.0) {
-				other2 = other_edge_p2;
-			} else {
-				other2 = other_edge_p1.lerp(other_edge_p2, (0.0 - projected_p1_ratio) / (projected_p2_ratio - projected_p1_ratio));
-			}
-			if (other2.distance_squared_to(self2) > edge_connection_margin_squared) {
-				continue;
-			}
-
-			// The edges can now be connected.
-			Connection new_connection = other_edge;
-			new_connection.pathway_start = (self1 + other1) / 2.0;
-			new_connection.pathway_end = (self2 + other2) / 2.0;
-			//free_edge.polygon->connections.push_back(new_connection);
 
 			// Add the connection to the region_connection map.
 			region_external_connections[free_edge.polygon->owner].push_back(new_connection);
 			navbases_polygons_external_connections[free_edge.polygon->owner][free_edge.polygon->id].push_back(new_connection);
 			performance_data.pm_edge_connection_count += 1;
+#ifdef DEBUG_ENABLED
+			if (check_against_all_pairs) {
+				grid_pairs.push_back(Pair<uint32_t, uint32_t>(i, j));
+			}
+#endif
 		}
 	}
+
+#ifdef DEBUG_ENABLED
+	if (check_against_all_pairs) {
+		uint32_t pair_index = 0;
+		bool same = true;
+		for (uint32_t i = 0; i < free_edge_count && same; i++) {
+			for (uint32_t j = 0; j < free_edge_count; j++) {
+				if (i == j || free_edges[i].polygon->owner == free_edges[j].polygon->owner) {
+					continue;
+				}
+				Connection unused;
+				if (!_edge_margin_connection(free_edges[i], free_edges[j], edge_connection_margin_squared, unused)) {
+					continue;
+				}
+				if (pair_index >= grid_pairs.size() || grid_pairs[pair_index].first != i || grid_pairs[pair_index].second != j) {
+					same = false;
+					break;
+				}
+				pair_index++;
+			}
+		}
+		if (!same || pair_index != grid_pairs.size()) {
+			ERR_PRINT(vformat("Navigation edge connection margin grid made different connections than the full comparison (%d free edges, %d grid connections, first difference at connection %d).", free_edge_count, grid_pairs.size(), pair_index));
+		}
+	}
+#endif
 }
 
 void NavMapBuilder3D::_build_step_navlink_connections(NavMapIterationBuild3D &r_build) {
