@@ -34,6 +34,7 @@
 #include "core/math/math_funcs.h"
 #include "core/math/random_pcg.h"
 #include "core/object/class_db.h"
+#include "core/object/script_instance.h"
 #include "core/os/os.h"
 #include "core/variant/container_type_validate.h" // IWYU pragma: keep.
 #include "scene/main/node.h" //only so casting works
@@ -857,10 +858,22 @@ Ref<Resource> ResourceCache::get_ref(const String &p_path) {
 
 		if (res) {
 			ref = Ref<Resource>(*res);
+
+			// Taking the reference above is what tells a garbage-collected script language
+			// that the native side wants the object again. If its script side was already
+			// collected, the script state is gone: drop the reference and treat the entry as
+			// stale, so the caller loads the resource again (the pending finalizer frees this one).
+			if (ref.is_valid()) {
+				const ScriptInstance *script_instance = ref->get_script_instance();
+				if (script_instance && !script_instance->is_script_side_alive()) {
+					ref.unref();
+				}
+			}
 		}
 
 		if (res && ref.is_null()) {
-			// This resource is in the process of being deleted, ignore its existence
+			// This resource is in the process of being deleted (or its script side was
+			// collected), ignore its existence
 			(*res)->path_cache = String();
 			resources.erase(p_path);
 			res = nullptr;

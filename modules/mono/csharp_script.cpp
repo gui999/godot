@@ -1785,7 +1785,10 @@ void CSharpInstance::mono_object_disposed(GCHandleIntPtr p_gchandle_to_free) {
 void CSharpInstance::mono_object_disposed_baseref(GCHandleIntPtr p_gchandle_to_free, bool p_is_finalizer, bool &r_delete_owner, bool &r_remove_script_instance) {
 #ifdef DEBUG_ENABLED
 	CRASH_COND(!base_ref_counted);
-	CRASH_COND(gchandle.is_released());
+	// A released gchandle is valid here: refcount_incremented() releases it when it finds the
+	// managed object already collected, and this object's queued finalizer is what calls us.
+	// The code below handles it: the owner is unreferenced (and deleted when nothing else holds
+	// it), and release_script_gchandle_thread_safe() frees only a held, matching handle.
 #endif // DEBUG_ENABLED
 
 	// Must make sure event signals are not left dangling

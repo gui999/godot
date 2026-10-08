@@ -337,6 +337,11 @@ public:
 
 	_FORCE_INLINE_ GCHandleIntPtr get_gchandle_intptr() { return gchandle.get_intptr(); }
 
+	// A released handle while the managed side still holds its unsafe reference means the managed
+	// object was collected and refcount_incremented() found its target dead; the pending finalizer
+	// will release the reference (see mono_object_disposed_baseref()).
+	bool is_script_side_alive() const override { return !(base_ref_counted && unsafe_referenced && gchandle.is_released()); }
+
 	Object *get_owner() override;
 
 	bool set(const StringName &p_name, const Variant &p_value) override;

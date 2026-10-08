@@ -83,6 +83,12 @@ public:
 	virtual void refcount_incremented() {}
 	virtual bool refcount_decremented() { return true; } //return true if it can die
 
+	// False when a garbage-collected language has already collected this instance's script-side
+	// object (and with it the script state) while the native object still lives, waiting for the
+	// script side's finalizer to release it. ResourceCache::get_ref() treats such a resource as a
+	// cache miss, so it is loaded again with its authored values instead of being revived empty.
+	virtual bool is_script_side_alive() const { return true; }
+
 	virtual Ref<Script> get_script() const = 0;
 
 	virtual bool is_placeholder() const { return false; }
