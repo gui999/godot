@@ -1281,6 +1281,13 @@ GDExtensionBool CSharpLanguage::_instance_binding_reference_callback(void *p_tok
 
 			// Release the current weak handle and replace it with a strong handle.
 
+			// The finalizer thread releases this handle under the same mutex (release_binding_gchandle_thread_safe()):
+			// read and swap it under it too, or the swap may be handed a handle the finalizer just freed.
+			MutexLock lock(get_singleton()->script_gchandle_release_mutex);
+			if (gchandle.is_released() || !gchandle.is_weak()) {
+				return false; // The finalizer released it first: the managed side was collected, nothing to do here
+			}
+
 			GCHandleIntPtr old_gchandle = gchandle.get_intptr();
 			gchandle.handle = { nullptr }; // No longer owns the handle (released by swap function)
 
@@ -1304,6 +1311,12 @@ GDExtensionBool CSharpLanguage::_instance_binding_reference_callback(void *p_tok
 			// the managed instance takes responsibility of deleting the owner when GCed.
 
 			// Release the current strong handle and replace it with a weak handle.
+
+			// Under the finalizer's release mutex, as for the increment above.
+			MutexLock lock(get_singleton()->script_gchandle_release_mutex);
+			if (gchandle.is_released() || gchandle.is_weak()) {
+				return refcount == 0;
+			}
 
 			GCHandleIntPtr old_gchandle = gchandle.get_intptr();
 			gchandle.handle = { nullptr }; // No longer owns the handle (released by swap function)
@@ -1862,6 +1875,13 @@ void CSharpInstance::refcount_incremented() {
 
 		// Release the current weak handle and replace it with a strong handle.
 
+		// The finalizer thread releases this handle under the same mutex (release_script_gchandle_thread_safe()):
+		// read and swap it under it too, or the swap may be handed a handle the finalizer just freed.
+		MutexLock lock(CSharpLanguage::get_singleton()->script_gchandle_release_mutex);
+		if (gchandle.is_released() || !gchandle.is_weak()) {
+			return; // The finalizer released it first: the managed side was collected, nothing to do here
+		}
+
 		GCHandleIntPtr old_gchandle = gchandle.get_intptr();
 		gchandle.handle = { nullptr }; // No longer owns the handle (released by swap function)
 
@@ -1893,6 +1913,12 @@ bool CSharpInstance::refcount_decremented() {
 		// the managed instance takes responsibility of deleting the owner when GCed.
 
 		// Release the current strong handle and replace it with a weak handle.
+
+		// Under the finalizer's release mutex, as for the increment above.
+		MutexLock lock(CSharpLanguage::get_singleton()->script_gchandle_release_mutex);
+		if (gchandle.is_released() || gchandle.is_weak()) {
+			return refcount == 0;
+		}
 
 		GCHandleIntPtr old_gchandle = gchandle.get_intptr();
 		gchandle.handle = { nullptr }; // No longer owns the handle (released by swap function)
