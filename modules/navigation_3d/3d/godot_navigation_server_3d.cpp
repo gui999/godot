@@ -1358,6 +1358,13 @@ void GodotNavigationServer3D::map_force_update(RID p_map) {
 	map->sync();
 }
 
+bool GodotNavigationServer3D::map_is_iteration_pending(RID p_map) const {
+	NavMap3D *map = map_owner.get_or_null(p_map);
+	ERR_FAIL_NULL_V(map, false);
+
+	return map->is_iteration_pending();
+}
+
 uint32_t GodotNavigationServer3D::map_get_iteration_id(RID p_map) const {
 	NavMap3D *map = map_owner.get_or_null(p_map);
 	ERR_FAIL_NULL_V(map, 0);

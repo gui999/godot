@@ -98,6 +98,7 @@ public:
 
 	virtual void map_force_update(RID p_map) = 0;
 	virtual uint32_t map_get_iteration_id(RID p_map) const = 0;
+	virtual bool map_is_iteration_pending(RID p_map) const = 0;
 
 	virtual void map_set_use_async_iterations(RID p_map, bool p_enabled) = 0;
 	virtual bool map_get_use_async_iterations(RID p_map) const = 0;

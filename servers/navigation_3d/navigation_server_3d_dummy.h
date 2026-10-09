@@ -66,6 +66,7 @@ public:
 	TypedArray<RID> map_get_obstacles(RID p_map) const override { return TypedArray<RID>(); }
 	void map_force_update(RID p_map) override {}
 	uint32_t map_get_iteration_id(RID p_map) const override { return 0; }
+	bool map_is_iteration_pending(RID p_map) const override { return false; }
 	void map_set_use_async_iterations(RID p_map, bool p_enabled) override {}
 	bool map_get_use_async_iterations(RID p_map) const override { return false; }
 

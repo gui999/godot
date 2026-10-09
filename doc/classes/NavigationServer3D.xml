@@ -670,6 +670,13 @@
 				Returns [code]true[/code] if the map is active.
 			</description>
 		</method>
+		<method name="map_is_iteration_pending" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="map" type="RID" />
+			<description>
+				Returns [code]true[/code] when the specified [param map] has a change that its queryable iteration does not hold yet: an iteration waiting to be built, being built, or built and not yet synchronized. An iteration that was already building when a region changed does not hold that change, even though [method map_get_iteration_id] increases when it is synchronized.
+			</description>
+		</method>
 		<method name="map_set_active">
 			<return type="void" />
 			<param index="0" name="map" type="RID" />

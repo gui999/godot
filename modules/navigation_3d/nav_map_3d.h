@@ -160,6 +160,8 @@ public:
 	~NavMap3D();
 
 	uint32_t get_iteration_id() const { return iteration_id; }
+	// A change not yet in the queryable iteration: one waiting to be built, building, or built and not yet swapped in.
+	bool is_iteration_pending() const { return iteration_dirty || iteration_building || iteration_ready; }
 
 	void set_up(Vector3 p_up);
 	Vector3 get_up() const {
