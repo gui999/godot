@@ -1785,9 +1785,14 @@ void CSharpInstance::mono_object_disposed_baseref(GCHandleIntPtr p_gchandle_to_f
 	disconnect_event_signals();
 
 	// In step with ResourceCache::get_ref() (call_in_step_with_script_side()): a reference the cache
-	// takes and drops cannot free the owner while this runs. The owner is never freed in here (the
-	// caller deletes it), so no lock is taken under this one that the cache holds.
-	MutexLock lock(CSharpLanguage::get_singleton()->script_gchandle_release_mutex);
+	// takes and drops cannot free the owner while the finalizer runs this. The owner is never freed in
+	// here (the caller deletes it), so no lock is taken under this one that the cache holds. Only the
+	// finalizer takes it: an explicit Dispose() holding it across the unreference could wait on another
+	// thread that is dropping the last reference and waits for it in refcount_decremented().
+	Mutex &release_mutex = CSharpLanguage::get_singleton()->script_gchandle_release_mutex;
+	if (p_is_finalizer) {
+		release_mutex.lock();
+	}
 
 	r_remove_script_instance = false;
 
@@ -1811,6 +1816,10 @@ void CSharpInstance::mono_object_disposed_baseref(GCHandleIntPtr p_gchandle_to_f
 			// resource cache treats the owner as stale (Terra Prime, D561).
 			script_side_lost = true;
 		}
+	}
+
+	if (p_is_finalizer) {
+		release_mutex.unlock();
 	}
 }
 
