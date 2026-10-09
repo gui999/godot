@@ -1813,7 +1813,7 @@ void CSharpInstance::mono_object_disposed_baseref(GCHandleIntPtr p_gchandle_to_f
 			// was referenced from another thread after the managed object was collected. A new
 			// managed instance would come back with its exported values reset (a C# script's state
 			// lives in the managed object), so none is made: the script side is lost, and the
-			// resource cache treats the owner as stale (Terra Prime, D561).
+			// resource cache treats the owner as stale (Terra Prime, D563).
 			script_side_lost = true;
 		}
 	}
