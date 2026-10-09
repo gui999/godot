@@ -1860,6 +1860,15 @@ void CSharpInstance::disconnect_event_signals() {
 	connected_event_signals.clear();
 }
 
+bool CSharpInstance::is_script_side_alive() const {
+	if (!base_ref_counted) {
+		return true;
+	}
+	// Under the mutex the finalizer thread releases the handle under.
+	MutexLock lock(CSharpLanguage::get_singleton()->script_gchandle_release_mutex);
+	return !gchandle.is_released();
+}
+
 void CSharpInstance::refcount_incremented() {
 #ifdef DEBUG_ENABLED
 	CRASH_COND(!base_ref_counted);
