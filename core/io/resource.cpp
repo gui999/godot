@@ -861,12 +861,17 @@ Ref<Resource> ResourceCache::get_ref(const String &p_path) {
 
 			// Taking the reference above is what tells a garbage-collected script language
 			// that the native side wants the object again. If its script side was already
-			// collected, the script state is gone: drop the reference and treat the entry as
-			// stale, so the caller loads the resource again (the pending finalizer frees this one).
+			// collected, the script state is gone: the entry is stale, and the caller loads the
+			// resource again. The entry leaves the cache first, so the drop below (which can free
+			// the resource) finds nothing to erase, and the drop runs in step with the script
+			// side's finalizer, which may still be releasing the object.
 			if (ref.is_valid()) {
-				const ScriptInstance *script_instance = ref->get_script_instance();
+				ScriptInstance *script_instance = ref->get_script_instance();
 				if (script_instance && !script_instance->is_script_side_alive()) {
-					ref.unref();
+					(*res)->path_cache = String();
+					resources.erase(p_path);
+					res = nullptr;
+					script_instance->call_in_step_with_script_side([](void *p_reference) { static_cast<Ref<Resource> *>(p_reference)->unref(); }, &ref);
 				}
 			}
 		}

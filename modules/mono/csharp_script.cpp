@@ -1471,7 +1471,7 @@ void CSharpLanguage::tie_managed_to_unmanaged_with_pre_setup(GCHandleIntPtr p_gc
 
 	{
 		MutexLock lock(CSharpLanguage::get_singleton()->get_script_instances_mutex());
-		// instances is a set, so it's safe to insert multiple times (e.g.: from _internal_new_managed)
+		// instances is a set, so it's safe to insert multiple times
 		instance->script->instances.insert(instance->owner);
 	}
 
@@ -1761,29 +1761,6 @@ bool CSharpInstance::_unreference_owner_unsafe() {
 	return static_cast<RefCounted *>(owner)->unreference();
 }
 
-bool CSharpInstance::_internal_new_managed() {
-	CSharpLanguage::get_singleton()->release_script_gchandle(gchandle);
-
-	ERR_FAIL_NULL_V(owner, false);
-	ERR_FAIL_COND_V(script.is_null(), false);
-	ERR_FAIL_COND_V(!script->can_instantiate(), false);
-
-	bool ok = GDMonoCache::managed_callbacks.ScriptManagerBridge_CreateManagedForGodotObjectScriptInstance(
-			script.ptr(), owner, nullptr, 0);
-
-	if (!ok) {
-		// Important to clear this before destroying the script instance here
-		script = Ref<CSharpScript>();
-		owner = nullptr;
-
-		return false;
-	}
-
-	CRASH_COND(gchandle.is_released());
-
-	return true;
-}
-
 void CSharpInstance::mono_object_disposed(GCHandleIntPtr p_gchandle_to_free) {
 	// Must make sure event signals are not left dangling
 	disconnect_event_signals();
@@ -1807,6 +1784,11 @@ void CSharpInstance::mono_object_disposed_baseref(GCHandleIntPtr p_gchandle_to_f
 	// Must make sure event signals are not left dangling
 	disconnect_event_signals();
 
+	// In step with ResourceCache::get_ref() (call_in_step_with_script_side()): a reference the cache
+	// takes and drops cannot free the owner while this runs. The owner is never freed in here (the
+	// caller deletes it), so no lock is taken under this one that the cache holds.
+	MutexLock lock(CSharpLanguage::get_singleton()->script_gchandle_release_mutex);
+
 	r_remove_script_instance = false;
 
 	if (_unreference_owner_unsafe()) {
@@ -1822,14 +1804,12 @@ void CSharpInstance::mono_object_disposed_baseref(GCHandleIntPtr p_gchandle_to_f
 			r_remove_script_instance = true;
 			// TODO: Last usage of 'is_finalizing_scripts_domain'. It should be replaced with a check to determine if the load context is being unloaded.
 		} else if (!GDMono::get_singleton()->is_finalizing_scripts_domain()) {
-			// If the native instance is still alive and this is called from the finalizer,
-			// then it was referenced from another thread before the finalizer could
-			// unreference and delete it, so we want to keep it.
-			// GC.ReRegisterForFinalize(this) is not safe because the objects referenced by 'this'
-			// could have already been collected. Instead we will create a new managed instance here.
-			if (!_internal_new_managed()) {
-				r_remove_script_instance = true;
-			}
+			// If the native instance is still alive and this is called from the finalizer, then it
+			// was referenced from another thread after the managed object was collected. A new
+			// managed instance would come back with its exported values reset (a C# script's state
+			// lives in the managed object), so none is made: the script side is lost, and the
+			// resource cache treats the owner as stale (Terra Prime, D561).
+			script_side_lost = true;
 		}
 	}
 }
@@ -1866,7 +1846,14 @@ bool CSharpInstance::is_script_side_alive() const {
 	}
 	// Under the mutex the finalizer thread releases the handle under.
 	MutexLock lock(CSharpLanguage::get_singleton()->script_gchandle_release_mutex);
-	return !gchandle.is_released();
+	return !script_side_lost && !gchandle.is_released();
+}
+
+void CSharpInstance::call_in_step_with_script_side(void (*p_function)(void *), void *p_userdata) {
+	// The finalizer's release (mono_object_disposed_baseref()) runs under this mutex too. The mutex is
+	// the language's, so it outlives this instance if p_function frees it.
+	MutexLock lock(CSharpLanguage::get_singleton()->script_gchandle_release_mutex);
+	p_function(p_userdata);
 }
 
 void CSharpInstance::refcount_incremented() {
@@ -1900,7 +1887,10 @@ void CSharpInstance::refcount_incremented() {
 				old_gchandle, &new_gchandle, create_weak);
 
 		if (!target_alive) {
-			return; // Called after the managed side was collected, so nothing to do here
+			// Called after the managed side was collected: the native side wants an object whose
+			// script state is gone.
+			script_side_lost = true;
+			return;
 		}
 
 		gchandle = MonoGCHandleData(new_gchandle, gdmono::GCHandleType::STRONG_HANDLE);

@@ -88,6 +88,11 @@ public:
 	// script side's finalizer to release it. ResourceCache::get_ref() treats such a resource as a
 	// cache miss, so it is loaded again with its authored values instead of being revived empty.
 	virtual bool is_script_side_alive() const { return true; }
+	// Runs p_function in step with the script side's own lifetime work (a garbage-collected language's
+	// finalizer releasing this instance): ResourceCache::get_ref() drops a stale reference through it,
+	// so the drop cannot free the owner while the finalizer is still working on it. p_function may
+	// free the owner and this instance.
+	virtual void call_in_step_with_script_side(void (*p_function)(void *), void *p_userdata) { p_function(p_userdata); }
 
 	virtual Ref<Script> get_script() const = 0;
 

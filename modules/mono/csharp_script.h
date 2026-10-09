@@ -309,6 +309,10 @@ class CSharpInstance : public ScriptInstance {
 	bool base_ref_counted = false;
 	bool ref_dying = false;
 	bool unsafe_referenced = false;
+	// The managed object was collected while the native side still wanted the owner (a reference taken
+	// after the collection, before or while the finalizer ran): its script state is gone for good. Set
+	// and read under CSharpLanguage::script_gchandle_release_mutex.
+	bool script_side_lost = false;
 	bool predelete_notified = false;
 	bool destructing_script_instance = false;
 
@@ -327,7 +331,6 @@ class CSharpInstance : public ScriptInstance {
 	/*
 	 * If false is returned, the caller must destroy the script instance by removing it from its owner.
 	 */
-	bool _internal_new_managed();
 
 	// Do not use unless you know what you are doing
 	static CSharpInstance *create_for_managed_type(Object *p_owner, CSharpScript *p_script, const MonoGCHandleData &p_gchandle);
@@ -342,6 +345,7 @@ public:
 	// or the finalizer already ran and dropped the managed side's unsafe reference, racing the caller
 	// that is taking a new reference now. Either way the script state is gone.
 	bool is_script_side_alive() const override;
+	void call_in_step_with_script_side(void (*p_function)(void *), void *p_userdata) override;
 
 	Object *get_owner() override;
 
